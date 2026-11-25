@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D-симуляция конвейера розлива воды — камера + сбиватель</title>
+<style>
+  :root{
+    --bg:#0d1420; --panel:rgba(18,26,38,.88); --line:#2b3d55; --txt:#dfe9f5; --dim:#8ba1bd;
+    --ok:#3fbf6a; --bad:#e2503f; --warn:#f2c14e; --cyan:#39c6d8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);
+    font:13px/1.45 "Segoe UI",system-ui,sans-serif}
+  #app{position:fixed;inset:0}
+  #app canvas{display:block}
+  .hud{position:absolute;z-index:5;pointer-events:none}
+  .hud .panel{pointer-events:auto;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px 14px;backdrop-filter:blur(6px)}
+  #topbar{top:14px;left:14px;right:290px;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+  #topbar h1{font-size:16px;margin:0 8px 0 0;font-weight:600}
+  .cards{display:flex;gap:8px;flex-wrap:wrap}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:6px 12px;min-width:92px;backdrop-filter:blur(6px)}
+  .card .n{font-size:20px;font-weight:700}
+  .card .t{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+  .card.ok .n{color:var(--ok)} .card.bad .n{color:var(--bad)} .card.warn .n{color:var(--warn)}
+  #ctrl{top:14px;right:14px;width:250px}
+  #ctrl h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+  label.row{display:flex;align-items:center;gap:8px;margin:7px 0;font-size:12px}
+  label.row input[type=range]{flex:1;accent-color:var(--cyan)}
+  label.row span{min-width:64px;text-align:right;color:var(--dim);font-size:11px}
+  .chk{display:flex;flex-direction:column;gap:5px;margin:8px 0}
+  .chk label{display:flex;gap:7px;align-items:center;cursor:pointer;font-size:12px}
+  input[type=checkbox]{accent-color:var(--cyan);width:14px;height:14px}
+  button{background:#223146;color:var(--txt);border:1px solid var(--line);
+    padding:7px 12px;border-radius:8px;cursor:pointer;font-size:12px;margin:2px 4px 0 0}
+  button:hover{background:#2c4060}
+  button.primary{background:#1c4f6e;border-color:#2a6b91}
+  #log{bottom:14px;left:14px;width:340px;max-height:170px;overflow-y:auto;pointer-events:auto;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:8px 12px;font:11px/1.5 Consolas,monospace;backdrop-filter:blur(6px)}
+  #log div{padding:2px 0;border-bottom:1px dashed rgba(43,61,85,.5)}
+  #hint{bottom:14px;right:360px;color:var(--dim);font-size:11px;text-align:right}
+  #camPanel{bottom:14px;right:14px}
+  #camPanel .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  #camPanel .head b{font:11px monospace;color:var(--cyan)}
+  #camVerdict{font:11px monospace}
+  #camStack{position:relative;width:320px;height:240px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+  #camStack canvas{position:absolute;inset:0;width:320px;height:240px;display:block}
+  #fallback{position:fixed;inset:0;display:none;place-items:center;z-index:20;background:var(--bg)}
+  #fallback div{max-width:420px;text-align:center;padding:24px;border:1px solid var(--line);border-radius:12px}
+  @media (max-width:900px){ #ctrl{width:210px} #log{width:250px} }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="hud" id="topbar">
+  <div class="panel" style="display:flex;align-items:center">
+    <h1>Конвейер розлива · 3D</h1>
+    <div class="cards">
+      <div class="card"><div class="n" id="s-prod">0</div><div class="t">Прошло</div></div>
+      <div class="card ok"><div class="n" id="s-ok">0</div><div class="t">Годные</div></div>
+      <div class="card bad"><div class="n" id="s-rej">0</div><div class="t">Брак</div></div>
+      <div class="card warn"><div class="n" id="s-miss">0</div><div class="t">Промахи камеры</div></div>
+      <div class="card warn"><div class="n" id="s-false">0</div><div class="t">Ложные срабатывания</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="hud panel" id="ctrl">
+  <h3>Параметры линии</h3>
+  <label class="row">Скорость
+    <input type="range" id="speed" min="30" max="260" value="100" step="10">
+    <span id="speedV">1.0 м/с</span>
+  </label>
+  <label class="row">Доля брака
+    <input type="range" id="rate" min="0" max="100" value="35" step="5">
+    <span id="rateV">35%</span>
+  </label>
+  <div class="chk">
+    <label><input type="checkbox" id="dFill" checked> Недолив</label>
+    <label><input type="checkbox" id="dCap" checked> Чужая крышка</label>
+    <label><input type="checkbox" id="dLbl" checked> Кривая этикетка</label>
+  </div>
+  <div>
+    <button class="primary" id="pauseBtn">⏸ Пауза</button>
+    <button id="resetBtn">⟲ Сброс</button>
+    <button id="camBtn">Камера</button>
+  </div>
+</div>
+
+<div class="hud" id="log"></div>
+<div class="hud" id="hint">ЛКМ — вращение · колесо — зум · ПКМ — панорама</div>
+
+<div class="hud panel" id="camPanel">
+  <div class="head"><b>CAM-01 · МАШИННОЕ ЗРЕНИЕ</b><span id="camVerdict">—</span></div>
+  <div id="camStack">
+    <canvas id="camView" width="320" height="240"></canvas>
+    <canvas id="camOverlay" width="320" height="240"></canvas>
+  </div>
+</div>
+
+<div id="fallback"><div>
+  <b>Не удалось загрузить 3D-движок</b><br><br>
+  Для работы симуляции нужен доступ к CDN (cdn.jsdelivr.net), откуда подгружается Three.js.
+  Проверьте интернет-соединение и обновите страницу.
+</div></div>
+
+<script>
+  // страховка: если модуль ниже не загрузился (нет сети/CDN), показываем заглушку
+  window.__simReady = false;
+  setTimeout(() => {
+    if (!window.__simReady) document.getElementById('fallback').style.display = 'grid';
+  }, 6000);
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+window.__simReady = true;
+
+// ================= КОНСТАНТЫ СЦЕНЫ =================
+const BELT_Y    = 1.05;                       // верх ленты
+const BELT_LEN  = 28, BELT_HW = 1.2;          // длина и полуширина ленты
+const CAM_X     = 0,  CAM_HALF = 1.3;         // зона камеры
+const FILL_MIN  = 0.85;                       // порог налива
+const PUSHER_X  = 4.6;                        // стойка сбивателя
+const TRIGGER_X = PUSHER_X - 0.35;
+const END_X     = 12.4;                       // конец ленты
+const RJ_BIN    = {x: PUSHER_X, z: 3.15, sx: 1.9, sz: 1.7, wall: 1.0};
+const OK_BIN    = {x: 13.5,     z: 0,    sx: 2.1, sz: 1.7, wall: 0.9};
+const CAP_OK    = 0x2e6ff2;
+const CAPS_BAD  = [0xe2503f, 0x3fae4a, 0xf2c14e, 0x9b59b6, 0x8d99a6];
+const FILL_CV   = 0.75;   // порог недолива по оценке компьютерного зрения
+const DEF_NAME  = {fill:'недолив', cap:'крышка', label:'этикетка'};
+const GRAV      = 9.8;
+
+// ================= РЕНДЕР / СЦЕНА =================
+const app = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1420);
+scene.fog = new THREE.Fog(0x0d1420, 34, 72);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+app.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 200);
+const CAM_HOME = {pos: new THREE.Vector3(12.5, 7.5, 12.5), tgt: new THREE.Vector3(2, 1.6, 0)};
+camera.position.copy(CAM_HOME.pos);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(CAM_HOME.tgt);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI/2 - 0.04;
+controls.minDistance = 4;
+controls.maxDistance = 48;
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ================= СВЕТ =================
+scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x1b212b, 0.85));
+scene.add(new THREE.AmbientLight(0xffffff, 0.22));
+const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+sun.position.set(9, 13, 7);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, {left:-20, right:20, top:14, bottom:-14, near:1, far:45});
+scene.add(sun);
+
+const scanSpot = new THREE.SpotLight(0x39c6d8, 40, 14, 0.55, 0.55, 1.6);
+scanSpot.position.set(CAM_X, 4.4, 0);
+scanSpot.target.position.set(CAM_X, BELT_Y, 0);
+scene.add(scanSpot, scanSpot.target);
+
+const pushLight = new THREE.PointLight(0xf2c14e, 0, 9, 1.8);
+pushLight.position.set(PUSHER_X, 2.6, 1);
+scene.add(pushLight);
+
+// ================= ПОЛ =================
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(90, 60),
+  new THREE.MeshStandardMaterial({color:0x151e29, roughness:0.95})
+);
+floor.rotation.x = -Math.PI/2;
+floor.receiveShadow = true;
+scene.add(floor);
+const grid = new THREE.GridHelper(70, 70, 0x24344a, 0x1a2634);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// ================= КОНВЕЙЕР =================
+function chevronTexture(){
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1c2634'; g.fillRect(0, 0, 64, 64);
+  g.strokeStyle = '#2e3f55'; g.lineWidth = 5;
+  for (let i = -64; i < 128; i += 22){
+    g.beginPath(); g.moveTo(i, 70); g.lineTo(i + 26, -6); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(26, 1);
+  return t;
+}
+
+const metal = new THREE.MeshStandardMaterial({color:0x3c4f68, roughness:0.4, metalness:0.75});
+const darkMetal = new THREE.MeshStandardMaterial({color:0x27344a, roughness:0.55, metalness:0.6});
+
+const beltBox = new THREE.Mesh(new THREE.BoxGeometry(BELT_LEN, 0.3, BELT_HW*2), darkMetal);
+beltBox.position.set(0, BELT_Y - 0.15, 0);
+beltBox.castShadow = true;
+scene.add(beltBox);
+
+const beltTex = chevronTexture();
+const surf = new THREE.Mesh(
+  new THREE.PlaneGeometry(BELT_LEN, BELT_HW*2),
+  new THREE.MeshStandardMaterial({map:beltTex, roughness:0.85})
+);
+surf.rotation.x = -Math.PI/2;
+surf.position.y = BELT_Y + 0.004;
+surf.receiveShadow = true;
+scene.add(surf);
+
+for (const s of [-1, 1]){
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(BELT_LEN, 0.4, 0.12), metal);
+  rail.position.set(0, BELT_Y + 0.16, s * (BELT_HW + 0.06));
+  rail.castShadow = true;
+  scene.add(rail);
+}
+for (const lx of [-12, -6, 0, 6, 12]){
+  for (const s of [-1, 1]){
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.18, BELT_Y - 0.3, 0.18), metal);
+    leg.position.set(lx, (BELT_Y - 0.3)/2, s * (BELT_HW - 0.25));
+    leg.castShadow = true;
+    scene.add(leg);
+  }
+  const cross = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, BELT_HW*2 - 0.3), metal);
+  cross.position.set(lx, 0.3, 0);
+  scene.add(cross);
+}
+const rollers = [];
+for (const rx of [-BELT_LEN/2 + 0.5, BELT_LEN/2 - 0.5]){
+  const grp = new THREE.Group();
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, BELT_HW*2, 20), metal);
+  cyl.rotation.x = Math.PI/2;
+  grp.add(cyl);
+  grp.position.set(rx, 0.93, 0);
+  scene.add(grp);
+  rollers.push(grp);
+}
+
+// ================= ЛОТКИ =================
+function makeBin(cfg, color, title){
+  const g = new THREE.Group();
+  const wallMat = new THREE.MeshPhysicalMaterial({
+    color, transparent:true, opacity:0.28, roughness:0.25, metalness:0.1,
+    side:THREE.DoubleSide, depthWrite:false
+  });
+  const t = 0.06, h = cfg.wall;
+  // дно + стенки (открытая сторона — к конвейеру)
+  const bottom = new THREE.Mesh(new THREE.BoxGeometry(cfg.sx, 0.06, cfg.sz), darkMetal);
+  bottom.position.y = 0.03; g.add(bottom);
+  const far = new THREE.Mesh(new THREE.BoxGeometry(cfg.sx, h, t), wallMat);
+  far.position.set(0, h/2, cfg.sz/2 - t/2); g.add(far);
+  for (const s of [-1, 1]){
+    const side = new THREE.Mesh(new THREE.BoxGeometry(t, h, cfg.sz), wallMat);
+    side.position.set(s*(cfg.sx/2 - t/2), h/2, 0); g.add(side);
+  }
+  // светящаяся кромка
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(cfg.sx, 0.05, 0.05),
+    new THREE.MeshBasicMaterial({color}));
+  edge.position.set(0, h, cfg.sz/2 - t/2); g.add(edge);
+  for (const s of [-1, 1]){
+    const e2 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, cfg.sz),
+      new THREE.MeshBasicMaterial({color}));
+    e2.position.set(s*(cfg.sx/2 - t/2), h, 0); g.add(e2);
+  }
+  g.position.set(cfg.x, 0, cfg.z);
+  // табличка
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const cg = c.getContext('2d');
+  cg.fillStyle = '#0d1420'; cg.fillRect(0, 0, 256, 64);
+  cg.strokeStyle = '#' + color.toString(16).padStart(6, '0'); cg.lineWidth = 4;
+  cg.strokeRect(2, 2, 252, 60);
+  cg.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  cg.font = 'bold 34px sans-serif'; cg.textAlign = 'center';
+  cg.fillText(title, 128, 44);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c), depthWrite:false}));
+  sign.scale.set(1.6, 0.4, 1);
+  sign.position.set(0, h + 0.35, 0);
+  g.add(sign);
+  scene.add(g);
+}
+makeBin(RJ_BIN, 0xe2503f, 'БРАК');
+makeBin(OK_BIN, 0x3fbf6a, 'ГОДНЫЕ');
+
+// ================= КАМЕРА-СКАНЕР =================
+const camGroup = new THREE.Group();
+for (const s of [-1, 1]){
+  const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.6, 0.14), metal);
+  pillar.position.set(CAM_X, BELT_Y + 1.8, s*2.1);
+  pillar.castShadow = true;
+  camGroup.add(pillar);
+}
+const beam = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 4.5), metal);
+beam.position.set(CAM_X, BELT_Y + 3.6, 0);
+beam.castShadow = true;
+camGroup.add(beam);
+
+const camBox = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.4, 0.7),
+  new THREE.MeshStandardMaterial({color:0x223349, roughness:0.5, metalness:0.4}));
+camBox.position.set(CAM_X, BELT_Y + 3.15, 0);
+camGroup.add(camBox);
+const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.18, 20),
+  new THREE.MeshStandardMaterial({color:0x0b0f16, roughness:0.2, metalness:0.8}));
+lens.position.set(CAM_X, BELT_Y + 2.9, 0);
+camGroup.add(lens);
+const camLamp = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 12),
+  new THREE.MeshBasicMaterial({color:0x39c6d8}));
+camLamp.position.set(CAM_X + 0.32, BELT_Y + 3.28, 0);
+camGroup.add(camLamp);
+
+// световой объём сканирования
+const scanVol = new THREE.Mesh(
+  new THREE.BoxGeometry(CAM_HALF*2, 2.1, BELT_HW*2),
+  new THREE.MeshBasicMaterial({color:0x39c6d8, transparent:true, opacity:0.07, depthWrite:false})
+);
+scanVol.position.set(CAM_X, BELT_Y + 1.1, 0);
+camGroup.add(scanVol);
+scene.add(camGroup);
+
+// ================= СБИВАТЕЛЬ =================
+const pushGroup = new THREE.Group();
+const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 3.2, 0.3), metal);
+post.position.set(PUSHER_X, 1.6, -2.3);
+post.castShadow = true;
+pushGroup.add(post);
+const railBeam = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 5.2), metal);
+railBeam.position.set(PUSHER_X, 3.0, 0.2);
+pushGroup.add(railBeam);
+
+const armMat  = new THREE.MeshStandardMaterial({color:0xb98a2e, roughness:0.5, metalness:0.3});
+const armHot  = new THREE.MeshStandardMaterial({color:0xf2c14e, roughness:0.4, metalness:0.3, emissive:0x664c10});
+const carriage = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.5, 0.6), darkMetal);
+carriage.position.set(PUSHER_X, 3.0, -2.1);
+pushGroup.add(carriage);
+const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 1, 12), metal);
+rod.rotation.x = Math.PI/2;
+pushGroup.add(rod);
+const armPlate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.0, 0.16), armMat);
+pushGroup.add(armPlate);
+const armFace = new THREE.Mesh(new THREE.BoxGeometry(0.56, 1.1, 0.05), armHot);
+pushGroup.add(armFace);
+scene.add(pushGroup);
+
+// зона срабатывания (маркер)
+const trigMark = new THREE.Mesh(
+  new THREE.BoxGeometry(0.06, 2.4, BELT_HW*2),
+  new THREE.MeshBasicMaterial({color:0xf2c14e, transparent:true, opacity:0.18, depthWrite:false})
+);
+trigMark.position.set(TRIGGER_X, BELT_Y + 1.2, 0);
+scene.add(trigMark);
+
+// ================= КАМЕРА МАШИННОГО ЗРЕНИЯ =================
+// Отдельный рендер вида «глазами камеры»: из него берётся кадр 320×240,
+// и по его пикселям работают три классических CV-детектора.
+const camViewEl = document.getElementById('camView');
+const camRenderer = new THREE.WebGLRenderer({canvas:camViewEl, antialias:false, preserveDrawingBuffer:true});
+camRenderer.setSize(320, 240, false);
+const eyeCam = new THREE.PerspectiveCamera(66, 4/3, 0.1, 60);
+const EYE_HOME = {pos:new THREE.Vector3(CAM_X, 2.95, 4.2), tgt:new THREE.Vector3(CAM_X, 1.95, 0)};
+eyeCam.position.copy(EYE_HOME.pos);
+eyeCam.lookAt(EYE_HOME.tgt);
+
+const camBuf = document.createElement('canvas');
+camBuf.width = 320; camBuf.height = 240;
+const camBufCtx = camBuf.getContext('2d', {willReadFrequently:true});
+const ovCtx = document.getElementById('camOverlay').getContext('2d');
+
+const _pv = new THREE.Vector3();
+function projectLocal(b, lx, ly){
+  _pv.set(b.x + lx, BELT_Y + 1.21 + ly, 0).project(eyeCam);
+  return {x:(_pv.x*0.5 + 0.5)*320, y:(1 - (_pv.y*0.5 + 0.5))*240};
+}
+
+function renderCamFrame(){
+  camRenderer.render(scene, eyeCam);
+}
+
+function runCV(b){
+  camBufCtx.drawImage(camRenderer.domElement, 0, 0);
+  const img = camBufCtx.getImageData(0, 0, 320, 240).data;
+  const px = (x, y) => { const i = (y*320 + x)*4; return [img[i], img[i+1], img[i+2]]; };
+  // водная синь — яркая, с характерным соотношением каналов;
+  // тёмно-синие полосы этикетки, голубая подсветка и синяя крышка под правило не попадают
+  const isWater  = (r,g,bl) => r<140 && g>100 && bl>170 && (bl-r)>60 && (bl-g)>=35 && (bl-g)<=130;
+  const isStripe = (r,g,bl) => r<80 && g<135 && bl>115;
+
+  const top = projectLocal(b, 0, 1.7), bot = projectLocal(b, 0, -1.3);
+  const midX = projectLocal(b, 0, 0).x;
+  const halfW = Math.abs(projectLocal(b, 0.75, 0).x - midX);
+  const res = {yTop:top.y, yBot:bot.y, midX, halfW, waterRow:null, fillEst:null,
+               capOK:null, labelAngle:null, pts:[], defects:[], capRect:null};
+
+  // --- 1. НАЛИВ: сканируем столбцы силуэта сверху вниз, ищем первую строку с водой
+  const x0 = Math.max(0, Math.round(midX - halfW*0.55));
+  const x1 = Math.min(319, Math.round(midX + halfW*0.55));
+  for (let y = Math.max(0, Math.round(res.yTop)); y <= Math.min(239, Math.round(res.yBot)) && res.waterRow === null; y++){
+    let hits = 0;
+    for (let x = x0; x <= x1; x += 2){
+      const [r,g,bl] = px(x,y);
+      if (isWater(r,g,bl)) hits++;
+    }
+    if (hits >= 2){
+      res.waterRow = y;
+      const ly = -1.3 + (y - res.yTop)/(res.yBot - res.yTop) * 3.0;   // строка кадра → локальная высота
+      res.fillEst = Math.min(1, Math.max(0, (ly + 1.1)/2.6));
+    }
+  }
+
+  // --- 2. КРЫШКА: усреднённый цвет в области крышки, порог «синевы»
+  const capC = projectLocal(b, 0, 2.11);
+  const ch = Math.max(3, halfW*0.5);
+  res.capRect = {x:capC.x, y:capC.y, hw:ch, hh:ch*0.45};
+  let rs=0, gs=0, bs=0, n=0;
+  for (let y = Math.round(capC.y - ch*0.45); y <= Math.round(capC.y + ch*0.45); y++)
+    for (let x = Math.round(capC.x - ch); x <= Math.round(capC.x + ch); x++){
+      if (x<0 || x>319 || y<0 || y>239) continue;
+      const [r,g,bl] = px(x,y);
+      rs+=r; gs+=g; bs+=bl; n++;
+    }
+  if (n > 8){
+    const r=rs/n, g=gs/n, bl=bs/n;
+    res.capOK = (bl - r) > 90 && bl > 120 && r < 130;
+  }
+
+  // --- 3. ЭТИКЕТКА: центроиды тёмно-синей полосы по колонкам → наклон прямой
+  const labT = projectLocal(b, 0, 1.02), labB = projectLocal(b, 0, 0.5);
+  const ly0 = Math.max(0, Math.round(labT.y)), ly1 = Math.min(239, Math.round(labB.y));
+  const lx0 = Math.max(0, Math.round(midX - halfW*0.8)), lx1 = Math.min(319, Math.round(midX + halfW*0.8));
+  for (let x = lx0; x <= lx1; x += 2){
+    let sum = 0, cnt = 0;
+    for (let y = ly0; y <= ly1; y++){
+      const [r,g,bl] = px(x,y);
+      if (isStripe(r,g,bl)){ sum += y; cnt++; }
+    }
+    if (cnt >= 2) res.pts.push([x, sum/cnt]);
+  }
+  if (res.pts.length >= 5){
+    const mx = res.pts.reduce((s,p)=>s+p[0],0)/res.pts.length;
+    const my = res.pts.reduce((s,p)=>s+p[1],0)/res.pts.length;
+    let num=0, den=0;
+    for (const [x,y] of res.pts){ num += (x-mx)*(y-my); den += (x-mx)*(x-mx); }
+    if (den > 1) res.labelAngle = Math.atan(num/den);
+  }
+
+  // --- вердикт по измерениям кадра (не по флагам!) ---
+  if (res.fillEst !== null && res.fillEst < FILL_CV) res.defects.push('fill');
+  if (res.capOK === false) res.defects.push('cap');
+  if (res.labelAngle !== null && Math.abs(res.labelAngle) > 0.13) res.defects.push('label');
+  return res;
+}
+
+// рамки и измерения поверх живого кадра камеры
+function drawCamOverlay(focus){
+  ovCtx.clearRect(0, 0, 320, 240);
+  ovCtx.font = '10px monospace';
+  ovCtx.textAlign = 'left';
+  if (!focus){
+    ovCtx.fillStyle = 'rgba(139,161,189,0.95)';
+    ovCtx.textAlign = 'center';
+    ovCtx.fillText('нет объекта в зоне', 160, 22);
+    return;
+  }
+  const cv = focus.cv;
+  if (!cv) return;
+  const ok = cv.defects.length === 0;
+  const col = ok ? '#3fbf6a' : '#e2503f';
+
+  // рамка объекта
+  ovCtx.strokeStyle = col; ovCtx.lineWidth = 2;
+  ovCtx.strokeRect(cv.midX - cv.halfW - 5, cv.yTop - 8, (cv.halfW + 5)*2, cv.yBot - cv.yTop + 16);
+
+  // найденный уровень воды
+  if (cv.waterRow !== null){
+    ovCtx.strokeStyle = '#39c6d8'; ovCtx.lineWidth = 2;
+    ovCtx.beginPath();
+    ovCtx.moveTo(cv.midX - cv.halfW, cv.waterRow);
+    ovCtx.lineTo(cv.midX + cv.halfW, cv.waterRow);
+    ovCtx.stroke();
+    ovCtx.fillStyle = '#39c6d8';
+    ovCtx.fillText('fill ≈ ' + (cv.fillEst === null ? '—' : cv.fillEst.toFixed(2)), cv.midX + cv.halfW + 8, cv.waterRow + 3);
+  }
+
+  // область крышки
+  if (cv.capRect){
+    ovCtx.strokeStyle = cv.capOK === false ? '#e2503f' : '#3fbf6a';
+    ovCtx.lineWidth = 1.5;
+    ovCtx.strokeRect(cv.capRect.x - cv.capRect.hw, cv.capRect.y - cv.capRect.hh, cv.capRect.hw*2, cv.capRect.hh*2);
+    ovCtx.fillStyle = cv.capOK === false ? '#e2503f' : '#3fbf6a';
+    ovCtx.fillText('cap: ' + (cv.capOK === null ? '?' : (cv.capOK ? 'OK' : 'ЧУЖАЯ')), cv.capRect.x - cv.capRect.hw, cv.capRect.y - cv.capRect.hh - 4);
+  }
+
+  // линия наклона этикетки
+  if (cv.pts.length >= 5){
+    ovCtx.strokeStyle = '#f2c14e'; ovCtx.lineWidth = 1.5;
+    ovCtx.beginPath();
+    ovCtx.moveTo(cv.pts[0][0], cv.pts[0][1]);
+    ovCtx.lineTo(cv.pts[cv.pts.length-1][0], cv.pts[cv.pts.length-1][1]);
+    ovCtx.stroke();
+    ovCtx.fillStyle = '#f2c14e';
+    ovCtx.fillText('label: ' + (cv.labelAngle*180/Math.PI).toFixed(1) + '°', cv.pts[0][0], cv.pts[0][1] - 6);
+  }
+
+  const vd = document.getElementById('camVerdict');
+  vd.textContent = cv.defects.length ? 'БРАК: ' + cv.defects.map(d => DEF_NAME[d]).join(', ') : 'ГОДНАЯ ✓';
+  vd.style.color = col;
+}
+
+// ================= БУТЫЛКИ =================
+const bodyGeo     = new THREE.CylinderGeometry(0.66, 0.66, 2.4, 22);
+const shoulderGeo = new THREE.CylinderGeometry(0.66, 0.30, 0.5, 22);
+const neckGeo     = new THREE.CylinderGeometry(0.30, 0.30, 0.26, 16);
+const capGeo      = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 16);
+const labelGeo    = new THREE.CylinderGeometry(0.69, 0.69, 0.6, 26, 1, true);
+const ringGeo     = new THREE.TorusGeometry(1.05, 0.045, 10, 40);
+
+const bodyMat = new THREE.MeshPhysicalMaterial({
+  color:0xeaf4fd, transparent:true, opacity:0.55, roughness:0.12, metalness:0
+});
+const waterMat = new THREE.MeshPhysicalMaterial({
+  color:0x3fa9f5, transparent:true, opacity:0.72, roughness:0.1, metalness:0
+});
+const labelTex = (() => {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#f4f7fb'; g.fillRect(0, 0, 256, 64);
+  g.fillStyle = '#1b4fa8'; g.fillRect(0, 0, 256, 11); g.fillRect(0, 53, 256, 11);
+  g.fillStyle = '#33475e'; g.font = 'bold 24px sans-serif'; g.textAlign = 'center';
+  g.fillText('AQUA', 128, 41);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const labelMat = new THREE.MeshStandardMaterial({map:labelTex, roughness:0.5, side:THREE.DoubleSide});
+
+function verdictTexture(ok, reasons){
+  const c = document.createElement('canvas'); c.width = 512; c.height = 112;
+  const g = c.getContext('2d');
+  g.fillStyle = ok ? 'rgba(23,110,58,0.92)' : 'rgba(146,38,28,0.92)';
+  g.beginPath(); g.roundRect(6, 6, 500, 100, 24); g.fill();
+  g.strokeStyle = ok ? '#3fbf6a' : '#e2503f'; g.lineWidth = 4;
+  g.beginPath(); g.roundRect(6, 6, 500, 100, 24); g.stroke();
+  g.fillStyle = '#ffffff';
+  let size = 42;
+  const text = ok ? 'ОК ✓' : 'БРАК: ' + reasons;
+  do { g.font = 'bold ' + size + 'px sans-serif'; size -= 2; }
+  while (g.measureText(text).width > 470 && size > 20);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, 256, 58);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// ---------- генерация ----------
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+function makeBottle(defects){
+  const capOK   = !defects.includes('cap');
+  const labelOK = !defects.includes('label');
+  const fill    = defects.includes('fill') ? 0.30 + Math.random()*0.25 : 0.88 + Math.random()*0.12;
+
+  // геометрия с центром в середине бутылки (удобно для кувырков)
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.castShadow = true;
+  group.add(body);
+  const shoulder = new THREE.Mesh(shoulderGeo, bodyMat);
+  shoulder.position.y = 1.45; shoulder.castShadow = true;
+  group.add(shoulder);
+  const neck = new THREE.Mesh(neckGeo, bodyMat);
+  neck.position.y = 1.83;
+  group.add(neck);
+  const cap = new THREE.Mesh(capGeo, new THREE.MeshStandardMaterial({
+    color: capOK ? CAP_OK : CAPS_BAD[(Math.random()*CAPS_BAD.length)|0],
+    roughness:0.45, metalness:0.15
+  }));
+  cap.position.y = 2.11; cap.castShadow = true;
+  group.add(cap);
+
+  const wh = Math.max(fill*2.6, 0.15);
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.56, 1, 22), waterMat);
+  water.scale.y = wh;
+  water.position.y = -1.1 + wh/2;
+  group.add(water);
+
+  const label = new THREE.Mesh(labelGeo, labelMat);
+  label.position.y = 0.75;
+  if (!labelOK){
+    label.rotation.y = Math.random()*Math.PI;
+    label.rotation.z = (Math.random() < 0.5 ? -1 : 1) * (0.22 + Math.random()*0.35);
+    label.position.y += (Math.random()*0.4 - 0.2);
+  } else {
+    label.rotation.y = Math.random()*Math.PI*2;
+  }
+  group.add(label);
+
+  const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+    color:0x39c6d8, transparent:true, opacity:0.9, depthWrite:false
+  }));
+  ring.rotation.x = Math.PI/2;
+  ring.position.y = 0.55;
+  ring.visible = false;
+  group.add(ring);
+
+  group.position.set(-13.6, BELT_Y + 1.21, 0);
+  scene.add(group);
+  return {
+    id: nextId++, group, ring, cap,
+    x: -13.6, z: 0, y: BELT_Y + 1.21,
+    fill, capOK, labelOK, defects:[], inspected:false, result:null, pushed:false,
+    state:'belt', fate:null,
+    vx:0, vy:0, vz:0, rvx:0, rvz:0, landT:0, sprite:null
+  };
+}
+
+function attachVerdict(b){
+  if (b.sprite){ b.group.remove(b.sprite); b.sprite.material.map.dispose(); b.sprite.material.dispose(); b.sprite = null; }
+  const ok = b.result === 'ok';
+  const tex = verdictTexture(ok, b.defects.map(d => DEF_NAME[d]).join(' + '));
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, depthWrite:false, transparent:true}));
+  sp.scale.set(3.0, 0.66, 1);
+  sp.position.set(0, 3.35, 0);
+  b.group.add(sp);
+  b.sprite = sp;
+  b.ring.visible = true;
+  b.ring.material.color.set(ok ? 0x3fbf6a : 0xe2503f);
+}
+
+function detachVerdict(b){
+  if (b.sprite){ b.group.remove(b.sprite); b.sprite.material.map.dispose(); b.sprite.material.dispose(); b.sprite = null; }
+  b.ring.visible = false;
+}
+
+// ================= СОСТОЯНИЕ =================
+let bottles = [], nextId = 1, distSinceSpawn = 999;
+let pusher = {state:'idle', armZ:-2.1, target:null};
+let stats  = {prod:0, ok:0, rej:{fill:0, cap:0, label:0}, missed:0, falsePos:0};
+let simTime = 0, beltOffset = 0;
+let paused = false, logItems = [];
+
+const speedEl = document.getElementById('speed');
+const rateEl  = document.getElementById('rate');
+const chkFill = document.getElementById('dFill');
+const chkCap  = document.getElementById('dCap');
+const chkLbl  = document.getElementById('dLbl');
+
+speedEl.addEventListener('input', () =>
+  document.getElementById('speedV').textContent = (speedEl.value/100).toFixed(1) + ' м/с');
+rateEl.addEventListener('input', () =>
+  document.getElementById('rateV').textContent = rateEl.value + '%');
+
+document.getElementById('pauseBtn').addEventListener('click', e => {
+  paused = !paused;
+  e.target.textContent = paused ? '▶ Пуск' : '⏸ Пауза';
+});
+document.getElementById('resetBtn').addEventListener('click', reset);
+document.getElementById('camBtn').addEventListener('click', () => {
+  camera.position.copy(CAM_HOME.pos);
+  controls.target.copy(CAM_HOME.tgt);
+});
+
+function reset(){
+  for (const b of bottles){ detachVerdict(b); scene.remove(b.group); }
+  bottles = []; nextId = 1; distSinceSpawn = 999;
+  pusher = {state:'idle', armZ:-2.1, target:null};
+  stats = {prod:0, ok:0, rej:{fill:0, cap:0, label:0}, missed:0, falsePos:0};
+  simTime = 0; logItems = []; renderLog();
+}
+
+// ================= ЖУРНАЛ =================
+function addLog(icon, text){
+  const m = String(Math.floor(simTime/60)).padStart(2, '0');
+  const s = String(Math.floor(simTime%60)).padStart(2, '0');
+  logItems.unshift('[' + m + ':' + s + '] ' + icon + ' ' + text);
+  if (logItems.length > 60) logItems.pop();
+  renderLog();
+}
+function renderLog(){
+  document.getElementById('log').innerHTML = logItems.map(t => '<div>' + t + '</div>').join('');
+}
+
+// ================= ЛОГИКА =================
+function spawn(){
+  const rate = +rateEl.value/100;
+  const enabled = [];
+  if (chkFill.checked) enabled.push('fill');
+  if (chkCap.checked)  enabled.push('cap');
+  if (chkLbl.checked)  enabled.push('label');
+  let defects = [];
+  if (enabled.length && Math.random() < rate){
+    shuffle(enabled);
+    defects = enabled.slice(0, (Math.random() < 0.15 && enabled.length > 1) ? 2 : 1);
+  }
+  bottles.push(makeBottle(defects));
+  stats.prod++;
+}
+
+function inspect(b){
+  b.inspected = true;
+  const cv = b.cv || runCV(b);
+  // истина известна заранее — сравниваем с вердиктом по кадру
+  const truth = [];
+  if (b.fill < FILL_MIN) truth.push('fill');
+  if (!b.capOK)          truth.push('cap');
+  if (!b.labelOK)        truth.push('label');
+  b.defects = cv.defects.slice();
+  b.result = b.defects.length ? 'reject' : 'ok';
+  b.missedByCam = truth.length > 0 && b.result === 'ok';
+  b.falseAlarm  = truth.length === 0 && b.result === 'reject';
+  attachVerdict(b);
+}
+
+function hitBottle(b){
+  detachVerdict(b);
+  b.state = 'fly'; b.fate = 'reject'; b.pushed = true;
+  b.vz = 3.0 + Math.random()*0.5;
+  b.vy = 2.3 + Math.random()*0.4;
+  b.vx = 0.2;
+  b.rvx = (Math.random()*4 + 4);
+  b.rvz = (Math.random()*2 - 1) * 5;
+  pushLight.intensity = 26;
+  if (b.falseAlarm){
+    stats.falsePos++;
+    addLog('⚠️', 'Ложное срабатывание: №' + b.id + ' была годной, сбита по вердикту CV (' + b.defects.map(d => DEF_NAME[d]).join(', ') + ')');
+  } else {
+    b.defects.forEach(d => stats.rej[d]++);
+    addLog('❌', '№' + b.id + ' сбита → камера: ' + b.defects.map(d => DEF_NAME[d]).join(', '));
+  }
+}
+
+function startFall(b){
+  detachVerdict(b);
+  if (b.missedByCam){
+    b.fate = 'missed';
+    stats.missed++;
+    addLog('⚠️', 'Промах камеры: №' + b.id + ' (' + b.defects.map(d => DEF_NAME[d]).join(', ') + ') проехала как годная');
+  } else {
+    b.fate = 'ok';
+    stats.ok++;
+    addLog('✅', '№' + b.id + ' — камера: годная, в приёмник');
+  }
+  b.state = 'fly';
+  b.vx = 0.55 + Math.random()*0.25;
+  b.vy = -0.4;
+  b.vz = 0;
+  b.rvx = (Math.random()*2 - 1) * 2;
+  b.rvz = (Math.random()*2 - 1) * 2;
+}
+
+function update(dt){
+  simTime += dt;
+  const speed = +speedEl.value/100;   // м/с
+  beltOffset = (beltOffset - speed*dt/1.077) % 1;
+  beltTex.offset.x = beltOffset;
+  for (const r of rollers) r.rotation.z -= speed*dt/0.16;
+  scanVol.material.opacity = 0.055 + 0.03*Math.sin(simTime*7);
+  camLamp.material.color.setHSL(0.52, 0.7, 0.45 + 0.35*Math.max(0, Math.sin(simTime*4)));
+  if (pushLight.intensity > 0) pushLight.intensity = Math.max(0, pushLight.intensity - 90*dt);
+  trigMark.material.opacity = 0.12 + 0.08*Math.sin(simTime*5);
+
+  // спавн по пройденному расстоянию — интервалы равные при любой скорости
+  distSinceSpawn += speed*dt;
+  if (distSinceSpawn >= 2.3){ distSinceSpawn = 0; spawn(); }
+
+  for (const b of bottles){
+    if (b.state === 'belt'){
+      b.x += speed*dt;
+      b.ring.visible = b.inspected && Math.abs(b.x - CAM_X) < 2.4;
+      if (b.ring.visible) b.ring.material.opacity = 0.55 + 0.4*Math.sin(simTime*6);
+      b.group.position.set(b.x, BELT_Y + 1.21, 0);
+      if (b.x >= END_X) startFall(b);
+    } else if (b.state === 'fly'){
+      b.vy -= GRAV*dt;
+      b.x += b.vx*dt; b.y += b.vy*dt; b.z += b.vz*dt;
+      b.group.rotation.x += b.rvx*dt;
+      b.group.rotation.z += b.rvz*dt;
+      b.group.position.set(b.x, b.y, b.z);
+      if (b.y <= 0.7) land(b);
+    } else {
+      b.landT += dt;
+    }
+  }
+
+  // не даём кучам в лотках расти бесконечно
+  const landed = bottles.filter(b => b.state === 'landed');
+  if (landed.length > 14){
+    for (const b of landed.slice(0, landed.length - 14)){ scene.remove(b.group); b.state = 'gone'; }
+  }
+  bottles = bottles.filter(b => {
+    if (b.state === 'landed' && b.landT > 20){ scene.remove(b.group); return false; }
+    return b.state !== 'gone';
+  });
+
+  // свежий кадр камеры машинного зрения
+  renderCamFrame();
+  // объект в зоне: CV по кадру; вердикт фиксируется при пересечении центра зоны
+  let focus = null, bestD = 9;
+  for (const b of bottles){
+    if (b.state !== 'belt') continue;
+    const d = Math.abs(b.x - CAM_X);
+    if (d < 2.2 && d < bestD){ bestD = d; focus = b; }
+  }
+  if (focus){
+    focus.cv = runCV(focus);
+    if (!focus.inspected && focus.x >= CAM_X) inspect(focus);
+  }
+  drawCamOverlay(focus);
+
+  // ---- сбиватель ----
+  if (pusher.state === 'idle'){
+    const t = bottles.find(b => b.state === 'belt' && !b.pushed && b.result === 'reject' && b.x >= TRIGGER_X);
+    if (t){ pusher.state = 'extend'; pusher.target = t; t.pushed = true; }
+  } else if (pusher.state === 'extend'){
+    pusher.armZ += 3.9*dt;
+    const t = pusher.target;
+    if (t && t.state === 'belt' && pusher.armZ >= -1.43) hitBottle(t);
+    if (!t || t.state !== 'belt' || pusher.armZ >= 1.3){ pusher.state = 'retract'; pusher.target = null; }
+  } else {
+    pusher.armZ -= 6.5*dt;
+    if (pusher.armZ <= -2.1){ pusher.armZ = -2.1; pusher.state = 'idle'; }
+  }
+  carriage.position.z = pusher.armZ;
+  armPlate.position.set(PUSHER_X, BELT_Y + 1.21, pusher.armZ + 0.55);
+  armFace.position.set(PUSHER_X, BELT_Y + 1.21, pusher.armZ + 0.70);
+  const hot = pusher.state === 'extend';
+  armPlate.material = hot ? armHot : armMat;
+  armFace.material  = hot ? armHot : armMat;
+  const rodLen = Math.max(0.25, (pusher.armZ - 0.15) - (-2.1));
+  rod.scale.z = rodLen;
+  rod.position.set(PUSHER_X, 3.0, ((pusher.armZ - 0.15) + (-2.1)) / 2);
+
+  // HUD
+  document.getElementById('s-prod').textContent = stats.prod;
+  document.getElementById('s-ok').textContent = stats.ok;
+  document.getElementById('s-rej').textContent = stats.rej.fill + stats.rej.cap + stats.rej.label;
+  document.getElementById('s-miss').textContent = stats.missed;
+  document.getElementById('s-false').textContent = stats.falsePos;
+}
+
+// приземление в лоток
+function land(b){
+  const bin = (b.fate === 'ok' || b.fate === 'missed') ? OK_BIN : RJ_BIN;
+  b.y = 0.68 + Math.random()*0.2;
+  b.x = Math.min(Math.max(b.x, bin.x - bin.sx/2 + 0.55), bin.x + bin.sx/2 - 0.55);
+  b.z = Math.min(Math.max(b.z, bin.z - bin.sz/2 + 0.55), bin.z + bin.sz/2 - 0.55);
+  b.state = 'landed';
+  b.vx = b.vy = b.vz = 0;
+  b.rvx = b.rvz = 0;
+  b.group.rotation.x = 0;
+  b.group.rotation.z = (Math.random() < 0.5 ? -1 : 1) * (Math.PI/2 - 0.14);
+  b.group.rotation.y = Math.random()*Math.PI;
+  b.group.position.set(b.x, b.y, b.z);
+}
+
+// ================= ЦИКЛ =================
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (!paused) update(dt);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
