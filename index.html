@@ -25,7 +25,7 @@
   .card .n{font-size:20px;font-weight:700}
   .card .t{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
   .card.ok .n{color:var(--ok)} .card.bad .n{color:var(--bad)} .card.warn .n{color:var(--warn)}
-  #ctrl{top:14px;right:14px;width:250px}
+  #ctrl{top:14px;right:14px;width:250px;pointer-events:auto}
   #ctrl h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
   label.row{display:flex;align-items:center;gap:8px;margin:7px 0;font-size:12px}
   label.row input[type=range]{flex:1;accent-color:var(--cyan)}
@@ -142,7 +142,7 @@ const RJ_BIN    = {x: PUSHER_X, z: 3.15, sx: 1.9, sz: 1.7, wall: 1.0};
 const OK_BIN    = {x: 13.5,     z: 0,    sx: 2.1, sz: 1.7, wall: 0.9};
 const CAP_OK    = 0x2e6ff2;
 const CAPS_BAD  = [0xe2503f, 0x3fae4a, 0xf2c14e, 0x9b59b6, 0x8d99a6];
-const FILL_CV   = 0.75;   // порог недолива по оценке компьютерного зрения
+const FILL_CV   = 0.68;   // порог недолива по оценке компьютерного зрения
 const DEF_NAME  = {fill:'недолив', cap:'крышка', label:'этикетка'};
 const GRAV      = 9.8;
 
@@ -188,8 +188,8 @@ sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, {left:-20, right:20, top:14, bottom:-14, near:1, far:45});
 scene.add(sun);
 
-const scanSpot = new THREE.SpotLight(0x39c6d8, 40, 14, 0.55, 0.55, 1.6);
-scanSpot.position.set(CAM_X, 4.4, 0);
+const scanSpot = new THREE.SpotLight(0x39c6d8, 4, 14, 0.55, 0.55, 1.6);
+scanSpot.position.set(CAM_X, 5.2, 2.2);   // подсветка не впритык к крышке — без пересвета
 scanSpot.target.position.set(CAM_X, BELT_Y, 0);
 scene.add(scanSpot, scanSpot.target);
 
@@ -316,29 +316,31 @@ makeBin(RJ_BIN, 0xe2503f, 'БРАК');
 makeBin(OK_BIN, 0x3fbf6a, 'ГОДНЫЕ');
 
 // ================= КАМЕРА-СКАНЕР =================
+// Гантри-консоль: обе стойки за конвейером (z<0), чтобы не перекрывать вид фронтальной камеры CV
 const camGroup = new THREE.Group();
-for (const s of [-1, 1]){
+for (const pz of [-2.1, -3.2]){
   const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.6, 0.14), metal);
-  pillar.position.set(CAM_X, BELT_Y + 1.8, s*2.1);
+  pillar.position.set(CAM_X, BELT_Y + 1.8, pz);
   pillar.castShadow = true;
   camGroup.add(pillar);
 }
-const beam = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 4.5), metal);
-beam.position.set(CAM_X, BELT_Y + 3.6, 0);
+const beam = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 5.6), metal);
+beam.position.set(CAM_X, BELT_Y + 3.6, -0.5);
 beam.castShadow = true;
 camGroup.add(beam);
 
+// корпус камеры смещён вбок к краю зоны, чтобы не висеть над крышками бутылок
 const camBox = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.4, 0.7),
   new THREE.MeshStandardMaterial({color:0x223349, roughness:0.5, metalness:0.4}));
-camBox.position.set(CAM_X, BELT_Y + 3.15, 0);
+camBox.position.set(CAM_X + 2.0, BELT_Y + 3.15, 0.6);
 camGroup.add(camBox);
 const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.18, 20),
   new THREE.MeshStandardMaterial({color:0x0b0f16, roughness:0.2, metalness:0.8}));
-lens.position.set(CAM_X, BELT_Y + 2.9, 0);
+lens.position.set(CAM_X + 2.0, BELT_Y + 2.9, 0.6);
 camGroup.add(lens);
 const camLamp = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 12),
   new THREE.MeshBasicMaterial({color:0x39c6d8}));
-camLamp.position.set(CAM_X + 0.32, BELT_Y + 3.28, 0);
+camLamp.position.set(CAM_X + 2.32, BELT_Y + 3.28, 0.6);
 camGroup.add(camLamp);
 
 // световой объём сканирования
@@ -388,7 +390,9 @@ scene.add(trigMark);
 const camViewEl = document.getElementById('camView');
 const camRenderer = new THREE.WebGLRenderer({canvas:camViewEl, antialias:false, preserveDrawingBuffer:true});
 camRenderer.setSize(320, 240, false);
-const eyeCam = new THREE.PerspectiveCamera(66, 4/3, 0.1, 60);
+// широкий вертикальный обзор: бутылка от дна до крышки с запасом;
+// крышка видна целиком, а не срезана краем кадра
+const eyeCam = new THREE.PerspectiveCamera(78, 4/3, 0.1, 60);
 const EYE_HOME = {pos:new THREE.Vector3(CAM_X, 2.95, 4.2), tgt:new THREE.Vector3(CAM_X, 1.95, 0)};
 eyeCam.position.copy(EYE_HOME.pos);
 eyeCam.lookAt(EYE_HOME.tgt);
@@ -412,9 +416,9 @@ function runCV(b){
   camBufCtx.drawImage(camRenderer.domElement, 0, 0);
   const img = camBufCtx.getImageData(0, 0, 320, 240).data;
   const px = (x, y) => { const i = (y*320 + x)*4; return [img[i], img[i+1], img[i+2]]; };
-  // водная синь — яркая, с характерным соотношением каналов;
-  // тёмно-синие полосы этикетки, голубая подсветка и синяя крышка под правило не попадают
-  const isWater  = (r,g,bl) => r<140 && g>100 && bl>170 && (bl-r)>60 && (bl-g)>=35 && (bl-g)<=130;
+  // вода теперь unlit — её цвет в кадре постоянен; голубая подсветка отсекается по bl-g,
+  // тёмные полосы этикетки — по g (полосы тёмные, вода светлая)
+  const isWater  = (r,g,bl) => r<170 && g>125 && bl>140 && (bl-r)>45 && (bl-g)>=30 && (bl-g)<=150;
   const isStripe = (r,g,bl) => r<80 && g<135 && bl>115;
 
   const top = projectLocal(b, 0, 1.7), bot = projectLocal(b, 0, -1.3);
@@ -423,36 +427,53 @@ function runCV(b){
   const res = {yTop:top.y, yBot:bot.y, midX, halfW, waterRow:null, fillEst:null,
                capOK:null, labelAngle:null, pts:[], defects:[], capRect:null};
 
-  // --- 1. НАЛИВ: сканируем столбцы силуэта сверху вниз, ищем первую строку с водой
-  const x0 = Math.max(0, Math.round(midX - halfW*0.55));
-  const x1 = Math.min(319, Math.round(midX + halfW*0.55));
-  for (let y = Math.max(0, Math.round(res.yTop)); y <= Math.min(239, Math.round(res.yBot)) && res.waterRow === null; y++){
+  // --- 1. НАЛИВ: сканируем столбцы силуэта сверху вниз; строка считается уровнем
+  // воды только если вода подтверждается в нескольких строках ниже (защита от шума)
+  const x0 = Math.max(0, Math.round(midX - halfW*0.5));
+  const x1 = Math.min(319, Math.round(midX + halfW*0.5));
+  const yEnd = Math.min(239, Math.round(res.yBot));
+  for (let y = Math.max(0, Math.round(res.yTop)); y <= yEnd && res.waterRow === null; y++){
     let hits = 0;
-    for (let x = x0; x <= x1; x += 2){
+    for (let x = x0; x <= x1; x++){
       const [r,g,bl] = px(x,y);
       if (isWater(r,g,bl)) hits++;
     }
-    if (hits >= 2){
-      res.waterRow = y;
-      const ly = -1.3 + (y - res.yTop)/(res.yBot - res.yTop) * 3.0;   // строка кадра → локальная высота
-      res.fillEst = Math.min(1, Math.max(0, (ly + 1.1)/2.6));
+    if (hits >= 3){
+      let cont = 0;
+      for (let k = 1; k <= 4 && y + k <= yEnd; k++){
+        let h2 = 0;
+        for (let x = x0; x <= x1; x++){
+          const [r,g,bl] = px(x, y + k);
+          if (isWater(r,g,bl)) h2++;
+        }
+        if (h2 >= 2) cont++;
+      }
+      if (cont >= 3){
+        res.waterRow = y;
+        // строка кадра → локальная высота: yTop (верх кадра) соответствует ly=1.7,
+        // yBot (низ кадра) — ly=-1.3; экранная строка y растёт вниз
+        const ly = 1.7 - (y - res.yTop)/(res.yBot - res.yTop) * 3.0;
+        res.fillEst = Math.min(1, Math.max(0, (ly + 1.1)/2.6));
+      }
     }
   }
 
-  // --- 2. КРЫШКА: усреднённый цвет в области крышки, порог «синевы»
+  // --- 2. КРЫШКА: доля «синих» пикселей в области крышки — устойчива к краям и бликам.
+  // Замер считаем только если область в кадре: если крышка срезана краем, детектор молчит
   const capC = projectLocal(b, 0, 2.11);
-  const ch = Math.max(3, halfW*0.5);
-  res.capRect = {x:capC.x, y:capC.y, hw:ch, hh:ch*0.45};
-  let rs=0, gs=0, bs=0, n=0;
-  for (let y = Math.round(capC.y - ch*0.45); y <= Math.round(capC.y + ch*0.45); y++)
-    for (let x = Math.round(capC.x - ch); x <= Math.round(capC.x + ch); x++){
-      if (x<0 || x>319 || y<0 || y>239) continue;
-      const [r,g,bl] = px(x,y);
-      rs+=r; gs+=g; bs+=bl; n++;
-    }
-  if (n > 8){
-    const r=rs/n, g=gs/n, bl=bs/n;
-    res.capOK = (bl - r) > 90 && bl > 120 && r < 130;
+  const ch = Math.max(4, halfW*0.55);
+  res.capRect = {x:capC.x, y:capC.y, hw:ch, hh:ch*0.42};
+  const cyTop = Math.round(capC.y - ch*0.42), cyBot = Math.round(capC.y + ch*0.42);
+  if (cyTop >= 0 && cyBot <= 239){
+    let blue=0, n=0;
+    for (let y = cyTop; y <= cyBot; y++)
+      for (let x = Math.round(capC.x - ch); x <= Math.round(capC.x + ch); x++){
+        if (x<0 || x>319) continue;
+        const [r,g,bl] = px(x,y);
+        n++;
+        if ((bl - r) >= 90 && (bl - g) >= 100) blue++;   // насыщенный синий CAP_OK: bl-g=131, у чужих — меньше 100
+      }
+    if (n > 20) res.capOK = (blue/n) >= 0.45;
   }
 
   // --- 3. ЭТИКЕТКА: центроиды тёмно-синей полосы по колонкам → наклон прямой
@@ -465,14 +486,14 @@ function runCV(b){
       const [r,g,bl] = px(x,y);
       if (isStripe(r,g,bl)){ sum += y; cnt++; }
     }
-    if (cnt >= 2) res.pts.push([x, sum/cnt]);
+    if (cnt >= 3) res.pts.push([x, sum/cnt]);   // отсекаем одиночные шумные пиксели
   }
-  if (res.pts.length >= 5){
+  if (res.pts.length >= 8){
     const mx = res.pts.reduce((s,p)=>s+p[0],0)/res.pts.length;
     const my = res.pts.reduce((s,p)=>s+p[1],0)/res.pts.length;
     let num=0, den=0;
     for (const [x,y] of res.pts){ num += (x-mx)*(y-my); den += (x-mx)*(x-mx); }
-    if (den > 1) res.labelAngle = Math.atan(num/den);
+    if (den > 5) res.labelAngle = Math.atan(num/den);
   }
 
   // --- вердикт по измерениям кадра (не по флагам!) ---
@@ -495,7 +516,9 @@ function drawCamOverlay(focus){
   }
   const cv = focus.cv;
   if (!cv) return;
-  const ok = cv.defects.length === 0;
+  // после фиксации вердикта показываем подтверждённое решение, до — живое чтение
+  const defects = focus.inspected ? focus.defects : cv.defects;
+  const ok = defects.length === 0;
   const col = ok ? '#3fbf6a' : '#e2503f';
 
   // рамка объекта
@@ -534,7 +557,7 @@ function drawCamOverlay(focus){
   }
 
   const vd = document.getElementById('camVerdict');
-  vd.textContent = cv.defects.length ? 'БРАК: ' + cv.defects.map(d => DEF_NAME[d]).join(', ') : 'ГОДНАЯ ✓';
+  vd.textContent = defects.length ? 'БРАК: ' + defects.map(d => DEF_NAME[d]).join(', ') : 'ГОДНАЯ ✓';
   vd.style.color = col;
 }
 
@@ -547,10 +570,12 @@ const labelGeo    = new THREE.CylinderGeometry(0.69, 0.69, 0.6, 26, 1, true);
 const ringGeo     = new THREE.TorusGeometry(1.05, 0.045, 10, 40);
 
 const bodyMat = new THREE.MeshPhysicalMaterial({
-  color:0xeaf4fd, transparent:true, opacity:0.55, roughness:0.12, metalness:0
+  color:0xeaf4fd, transparent:true, opacity:0.32, roughness:0.12, metalness:0, depthWrite:false
 });
-const waterMat = new THREE.MeshPhysicalMaterial({
-  color:0x3fa9f5, transparent:true, opacity:0.72, roughness:0.1, metalness:0
+// вода и крышки — unlit: их цвет в кадре не зависит от освещения,
+// и CV-детекторы работают с предсказуемыми значениями
+const waterMat = new THREE.MeshBasicMaterial({
+  color:0x1e78d0, transparent:true, opacity:0.85, depthWrite:false
 });
 const labelTex = (() => {
   const c = document.createElement('canvas'); c.width = 256; c.height = 64;
@@ -596,16 +621,18 @@ function makeBottle(defects){
   const group = new THREE.Group();
   const body = new THREE.Mesh(bodyGeo, bodyMat);
   body.castShadow = true;
+  body.renderOrder = 2;
   group.add(body);
   const shoulder = new THREE.Mesh(shoulderGeo, bodyMat);
   shoulder.position.y = 1.45; shoulder.castShadow = true;
+  shoulder.renderOrder = 2;
   group.add(shoulder);
   const neck = new THREE.Mesh(neckGeo, bodyMat);
   neck.position.y = 1.83;
+  neck.renderOrder = 2;
   group.add(neck);
-  const cap = new THREE.Mesh(capGeo, new THREE.MeshStandardMaterial({
-    color: capOK ? CAP_OK : CAPS_BAD[(Math.random()*CAPS_BAD.length)|0],
-    roughness:0.45, metalness:0.15
+  const cap = new THREE.Mesh(capGeo, new THREE.MeshBasicMaterial({
+    color: capOK ? CAP_OK : CAPS_BAD[(Math.random()*CAPS_BAD.length)|0]
   }));
   cap.position.y = 2.11; cap.castShadow = true;
   group.add(cap);
@@ -614,6 +641,7 @@ function makeBottle(defects){
   const water = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.56, 1, 22), waterMat);
   water.scale.y = wh;
   water.position.y = -1.1 + wh/2;
+  water.renderOrder = 1;
   group.add(water);
 
   const label = new THREE.Mesh(labelGeo, labelMat);
@@ -642,7 +670,8 @@ function makeBottle(defects){
     x: -13.6, z: 0, y: BELT_Y + 1.21,
     fill, capOK, labelOK, defects:[], inspected:false, result:null, pushed:false,
     state:'belt', fate:null,
-    vx:0, vy:0, vz:0, rvx:0, rvz:0, landT:0, sprite:null
+    vx:0, vy:0, vz:0, rvx:0, rvz:0, landT:0, sprite:null,
+    cvN:0, capBad:0, lblBad:0, fillHist:[]
   };
 }
 
@@ -736,7 +765,17 @@ function inspect(b){
   if (b.fill < FILL_MIN) truth.push('fill');
   if (!b.capOK)          truth.push('cap');
   if (!b.labelOK)        truth.push('label');
-  b.defects = cv.defects.slice();
+  // усреднение по кадрам: дефект признаётся только при повторении, а не в одном шуме
+  const cvDef = [];
+  if (b.fillHist.length >= 3){
+    const sorted = b.fillHist.slice().sort((a,c) => a - c);
+    const est = sorted[Math.floor(sorted.length/2)];
+    if (est < FILL_CV) cvDef.push('fill');
+  } else if (cv.fillEst !== null && cv.fillEst < FILL_CV) cvDef.push('fill');
+  if (b.capBad >= 3) cvDef.push('cap');
+  if (b.lblBad >= 3) cvDef.push('label');
+  cv.defects = cvDef.slice();
+  b.defects = cvDef.slice();
   b.result = b.defects.length ? 'reject' : 'ok';
   b.missedByCam = truth.length > 0 && b.result === 'ok';
   b.falseAlarm  = truth.length === 0 && b.result === 'reject';
@@ -835,6 +874,13 @@ function update(dt){
   }
   if (focus){
     focus.cv = runCV(focus);
+    focus.cvN++;
+    if (focus.cv.capOK === false) focus.capBad++;
+    if (focus.cv.labelAngle !== null && Math.abs(focus.cv.labelAngle) > 0.13) focus.lblBad++;
+    if (focus.cv.fillEst !== null){
+      focus.fillHist.push(focus.cv.fillEst);
+      if (focus.fillHist.length > 7) focus.fillHist.shift();
+    }
     if (!focus.inspected && focus.x >= CAM_X) inspect(focus);
   }
   drawCamOverlay(focus);
